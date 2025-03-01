@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles */
+body {
+  @apply bg-gray-50;
+  font-family: 'Inter', sans-serif;
+}
+/* Adjust the margin-top based on your navbar height */
+/* Ensure Swiper container takes full height */
+.swiper {
+  height: 100%;
+}
+
+/* If using a fixed navbar */
+nav {
+  position: fixed;
+  top: 0;
+  width: 100%;
+  z-index: 1000;
+}
