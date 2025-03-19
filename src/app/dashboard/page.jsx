@@ -1,243 +1,276 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { auth } from '@/lib/firebase';
+import { useState, useEffect } from 'react';
+import { auth, db } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { setupNotifications } from '@/lib/notifications';
+import {
+  doc,
+  getDoc,
+  collection,
+  query,
+  where,
+  orderBy,
+  getDocs,
+  setDoc,
+  updateDoc
+} from 'firebase/firestore';
+import { signOut } from 'firebase/auth';
 
 export default function Dashboard() {
   const router = useRouter();
-  const [userMaterials, setUserMaterials] = useState([]);
-  const [requests, setRequests] = useState([]);
+  const [userDoc, setUserDoc] = useState(null);
+  const [books, setBooks] = useState([]);
+  const [comments, setComments] = useState({});
+  const [newComment, setNewComment] = useState('');
+  const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [newMaterial, setNewMaterial] = useState({
-    title: '',
-    description: '',
-    subject: '',
-    level: 'Beginner'
-  });
+  // New state for displaying request success message
+  const [requestMessage, setRequestMessage] = useState('');
 
-  // Fetch user's materials and requests
+  // Fetch current user's document (for role, name, etc.)
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const user = auth.currentUser;
-        if (!user) return;
-
-        // Fetch user's posted materials
-        const materialsRes = await fetch(`/api/materials?userId=${user.uid}`);
-        const materialsData = await materialsRes.json();
-        setUserMaterials(materialsData);
-
-        // Fetch requests for user's materials
-        const requestsRes = await fetch(`/api/requests?ownerId=${user.uid}`);
-        const requestsData = await requestsRes.json();
-        setRequests(requestsData);
-
-      } catch (error) {
-        console.error('Dashboard error:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const unsubscribe = auth.onAuthStateChanged(user => {
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
       if (!user) {
         router.push('/login');
-      } else {
-        fetchData();
+        return;
+      }
+      const userDocRef = doc(db, 'users', user.uid);
+      const userSnap = await getDoc(userDocRef);
+      if (userSnap.exists()) {
+        setUserDoc({ id: user.uid, ...userSnap.data() });
       }
     });
-
     return () => unsubscribe();
   }, [router]);
 
-  const handlePostMaterial = async (e) => {
-    e.preventDefault();
-    try {
-      const user = auth.currentUser;
-      const res = await fetch('/api/materials', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': await user.getIdToken()
-        },
-        body: JSON.stringify({
-          ...newMaterial,
-          ownerId: user.uid,
-          ownerEmail: user.email
-        })
-      });
-
-      if (res.ok) {
-        const newMaterialData = await res.json();
-        setUserMaterials([...userMaterials, newMaterialData]);
-        setNewMaterial({ title: '', description: '', subject: '', level: 'Beginner' });
+  // Fetch books based on user's role (requester sees only available books)
+  useEffect(() => {
+    const fetchBooks = async () => {
+      const booksColRef = collection(db, 'books');
+      let booksQuery;
+      if (userDoc?.role === 'requester') {
+        booksQuery = query(
+          booksColRef,
+          where('status', '==', 'available'),
+          orderBy('createdAt', 'desc')
+        );
+      } else {
+        booksQuery = query(booksColRef, orderBy('createdAt', 'desc'));
       }
+      const booksSnapshot = await getDocs(booksQuery);
+      const booksData = booksSnapshot.docs.map(docSnap => ({
+        id: docSnap.id,
+        ...docSnap.data()
+      }));
+      setBooks(booksData);
+
+      // Load comments for each book
+      booksData.forEach(async (book) => {
+        const commentsColRef = collection(db, 'books', book.id, 'comments');
+        const commentsQuery = query(commentsColRef, orderBy('createdAt', 'asc'));
+        const commentsSnapshot = await getDocs(commentsQuery);
+        setComments(prev => ({
+          ...prev,
+          [book.id]: commentsSnapshot.docs.map(c => ({ id: c.id, ...c.data() }))
+        }));
+      });
+      setLoading(false);
+    };
+
+    if (userDoc) fetchBooks();
+  }, [userDoc]);
+
+  // Listen for notifications
+  useEffect(() => {
+    let unsubscribeNotifications;
+    const unsubscribeAuth = auth.onAuthStateChanged(user => {
+      if (user) {
+        unsubscribeNotifications = setupNotifications(user.uid, setNotifications);
+      }
+    });
+    return () => {
+      unsubscribeAuth?.();
+      unsubscribeNotifications?.();
+    };
+  }, []);
+
+  // Logout handler
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      router.push('/login');
     } catch (error) {
-      console.error('Posting error:', error);
+      console.error("Error logging out:", error);
     }
   };
 
-  const handleRequestUpdate = async (requestId, status) => {
-    try {
-      const res = await fetch(`/api/requests/${requestId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': await auth.currentUser.getIdToken()
-        },
-        body: JSON.stringify({ status })
-      });
+  // For requesters: Add a book request (only add a comment)
+  const handleBookRequest = async (bookId) => {
+    const commentsColRef = collection(db, 'books', bookId, 'comments');
+    const newCommentRef = doc(commentsColRef);
+  
+    await setDoc(newCommentRef, {
+      userId: userDoc.id,
+      requesterName: userDoc.name,
+      message: "I would like to request this book",
+      isRequest: true,
+      createdAt: new Date().toISOString()
+    });
+  
+    // Show a success message for 3 seconds
+    setRequestMessage("Your request has been sent successfully!");
+    setTimeout(() => setRequestMessage(''), 3000);
+  };
 
-      if (res.ok) {
-        setRequests(requests.map(req => 
-          req._id === requestId ? { ...req, status } : req
-        ));
+  // For donors: Update a request comment (approve/reject)
+  const handleRequestResponse = async (bookId, commentId, response) => {
+    try {
+      const commentDocRef = doc(db, 'books', bookId, 'comments', commentId);
+      await updateDoc(commentDocRef, { status: response });
+  
+      if (response === 'approved') {
+        const bookDocRef = doc(db, 'books', bookId);
+        await updateDoc(bookDocRef, {
+          status: 'claimed',
+          updatedAt: new Date().toISOString()
+        });
       }
     } catch (error) {
-      console.error('Update error:', error);
+      console.error("Error updating request:", error);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
-      </div>
-    );
-  }
+  // For donors: Optionally, submit a reply comment
+  const handleCommentSubmit = async (bookId) => {
+    if (!newComment.trim()) return;
+  
+    const commentsColRef = collection(db, 'books', bookId, 'comments');
+    const newCommentRef = doc(commentsColRef);
+  
+    await setDoc(newCommentRef, {
+      userId: userDoc.id,
+      message: newComment.trim(),
+      isRequest: false,
+      createdAt: new Date().toISOString()
+    });
+  
+    setNewComment('');
+    // Refresh comments for this book
+    const updatedCommentsSnapshot = await getDocs(collection(db, 'books', bookId, 'comments'));
+    setComments(prev => ({
+      ...prev,
+      [bookId]: updatedCommentsSnapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))
+    }));
+  };
+
+  if (loading) return <div className="p-8">Loading...</div>;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        <h1 className="text-3xl font-bold mb-8">Welcome to Your Dashboard</h1>
-
-        {/* Post New Material Section */}
-        <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4">Post New Material</h2>
-          <form onSubmit={handlePostMaterial} className="space-y-4">
-            <input
-              type="text"
-              placeholder="Title"
-              className="w-full p-2 border rounded"
-              value={newMaterial.title}
-              onChange={(e) => setNewMaterial({...newMaterial, title: e.target.value})}
-              required
-            />
-            <textarea
-              placeholder="Description"
-              className="w-full p-2 border rounded"
-              value={newMaterial.description}
-              onChange={(e) => setNewMaterial({...newMaterial, description: e.target.value})}
-              required
-            />
-            <div className="grid grid-cols-2 gap-4">
-              <input
-                type="text"
-                placeholder="Subject (e.g., Mathematics)"
-                className="p-2 border rounded"
-                value={newMaterial.subject}
-                onChange={(e) => setNewMaterial({...newMaterial, subject: e.target.value})}
-                required
-              />
-              <select
-                className="p-2 border rounded"
-                value={newMaterial.level}
-                onChange={(e) => setNewMaterial({...newMaterial, level: e.target.value})}
+    <div className="flex min-h-screen bg-gray-100">
+      {/* Sidebar Navigation */}
+      <aside className="fixed top-20 left-0 w-64 h-[calc(100vh-5rem)] bg-white shadow-lg overflow-hidden">
+        <div className="p-6 border-b">
+          <h2 className="text-2xl font-bold text-gray-800">Book Exchange</h2>
+          <p className="text-gray-600">{userDoc?.name}</p>
+        </div>
+        <nav className="p-4 mt-44 w-52">
+          <ul className="flex flex-col space-y-2">
+            <li>
+              <button
+                onClick={() => router.push('/dashboard')}
+                className="block w-full text-left py-2 px-4 rounded-md transition-colors duration-200 hover:bg-gray-100"
               >
-                <option>Beginner</option>
-                <option>Intermediate</option>
-                <option>Advanced</option>
-              </select>
-            </div>
-            <button
-              type="submit"
-              className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-            >
-              Post Material
-            </button>
-          </form>
-        </div>
+                Dashboard
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => router.push('/profile')}
+                className="block w-full text-left py-2 px-4 rounded-md transition-colors duration-200 hover:bg-gray-100"
+              >
+                Profile
+              </button>
+            </li>
+            {userDoc?.role === 'donor' && (
+              <li>
+                <button
+                  onClick={() => router.push('/post-book')}
+                  className="block w-full text-left py-2 px-4 rounded-md transition-colors duration-200 hover:bg-gray-100"
+                >
+                  Post New Book
+                </button>
+              </li>
+            )}
+            <li>
+              <button
+                onClick={handleLogout}
+                className="block w-full text-left py-2 px-4 rounded-md transition-colors duration-200 hover:bg-gray-100"
+              >
+                Logout
+              </button>
+            </li>
+          </ul>
+        </nav>
+      </aside>
 
-        {/* Posted Materials Section */}
-        <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-xl font-semibold mb-4">Your Posted Materials</h2>
-          {userMaterials.length === 0 ? (
-            <p className="text-gray-500">No materials posted yet</p>
-          ) : (
-            <div className="space-y-4">
-              {userMaterials.map(material => (
-                <div key={material._id} className="border p-4 rounded">
-                  <h3 className="font-semibold">{material.title}</h3>
-                  <p className="text-gray-600">{material.description}</p>
-                  <div className="flex gap-2 mt-2">
-                    <span className="bg-gray-100 px-2 py-1 rounded text-sm">
-                      {material.subject}
-                    </span>
-                    <span className="bg-gray-100 px-2 py-1 rounded text-sm">
-                      {material.level}
-                    </span>
-                  </div>
+      {/* Main Content Area */}
+      <main className="flex-1 p-8 ml-64 pt-16">
+        <h1 className="text-3xl font-bold mb-6">
+          {userDoc?.role === 'donor'
+            ? "Donor Dashboard"
+            : "Requester Dashboard"}
+        </h1>
+
+        {/* Show request success message for requesters */}
+        {requestMessage && (
+          <div className="mb-4 p-4 bg-green-100 text-green-800 rounded">
+            {requestMessage}
+          </div>
+        )}
+
+        {/* Books Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+          {books.map(book => (
+            <div key={book.id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow">
+              {/* Book Image */}
+              {book.imageURL ? (
+                <img src={book.imageURL} alt={book.title} className="h-48 w-full object-cover" />
+              ) : (
+                <div className="h-48 w-full bg-gray-300 flex items-center justify-center">
+                  <span className="text-gray-600">No Image</span>
                 </div>
-              ))}
+              )}
+              <div className="p-4">
+                <h2 className="text-xl font-semibold mb-1">{book.title}</h2>
+                <p className="text-gray-600 text-sm mb-1">{book.subject} &mdash; {book.level}</p>
+                <p className="text-sm text-gray-500 mb-2">Condition: {book.condition}</p>
+                {book.quantity && (
+                  <p className="text-sm text-gray-500 mb-2">Available: {book.quantity}</p>
+                )}
+                <p className="text-gray-700 text-sm mb-4 line-clamp-2">{book.description}</p>
+                
+                {/* Action Buttons */}
+                {userDoc?.role === 'requester' && (
+                  <button
+                    onClick={() => handleBookRequest(book.id)}
+                    className="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  >
+                    I want this book
+                  </button>
+                )}
+                {userDoc?.role === 'donor' && book.owner === userDoc.id && (
+                  <button
+                    onClick={() => router.push(`/manage-book/${book.id}`)}
+                    className="w-full py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                  >
+                    Manage Book
+                  </button>
+                )}
+              </div>
             </div>
-          )}
+          ))}
         </div>
-
-        {/* Material Requests Section */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold mb-4">Material Requests</h2>
-          {requests.length === 0 ? (
-            <p className="text-gray-500">No requests yet</p>
-          ) : (
-            <div className="space-y-4">
-              {requests.map(request => (
-                <div key={request._id} className="border p-4 rounded">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="font-semibold">{request.materialTitle}</p>
-                      <p className="text-gray-600">From: {request.requesterEmail}</p>
-                      <p className="text-sm">Message: {request.message}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleRequestUpdate(request._id, 'approved')}
-                        className="px-3 py-1 bg-green-100 text-green-800 rounded text-sm"
-                        disabled={request.status !== 'pending'}
-                      >
-                        {request.status === 'approved' ? 'Approved' : 'Approve'}
-                      </button>
-                      <button
-                        onClick={() => handleRequestUpdate(request._id, 'rejected')}
-                        className="px-3 py-1 bg-red-100 text-red-800 rounded text-sm"
-                        disabled={request.status !== 'pending'}
-                      >
-                        {request.status === 'rejected' ? 'Rejected' : 'Reject'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Additional Dashboard Links */}
-        <div className="mt-8 flex gap-4">
-          <Link 
-            href="/materials" 
-            className="text-green-600 hover:text-green-700 font-medium"
-          >
-            Browse All Materials →
-          </Link>
-          <button 
-            onClick={() => auth.signOut()}
-            className="text-gray-600 hover:text-gray-800 font-medium"
-          >
-            Logout
-          </button>
-        </div>
-      </div>
+      </main>
     </div>
   );
 }

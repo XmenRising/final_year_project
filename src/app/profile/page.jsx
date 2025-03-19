@@ -1,34 +1,84 @@
-export default function Profile() {
-    const user = {
-      name: "John Doe",
-      email: "john.doe@example.com",
-      materialsListed: [
-        { id: 1, title: "Introduction to Algorithms", condition: "Good" },
-        { id: 2, title: "Clean Code", condition: "Like New" },
-      ],
+'use client';
+import { useState, useEffect } from 'react';
+import { auth, db } from '@/lib/firebase';
+import { useRouter } from 'next/navigation';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+
+export default function ProfilePage() {
+  const router = useRouter();
+  const [userData, setUserData] = useState(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    location: ''
+  });
+
+  useEffect(() => {
+    const fetchData = async () => {
+      const user = auth.currentUser;
+      if (!user) {
+        router.push('/login');
+        return;
+      }
+      const userDocRef = doc(db, 'users', user.uid);
+      const userSnap = await getDoc(userDocRef);
+      if (userSnap.exists()) {
+        setUserData(userSnap.data());
+        setFormData({
+          name: userSnap.data().name || '',
+          location: userSnap.data().location || ''
+        });
+      }
     };
-  
-    return (
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        <h1 className="text-3xl font-bold text-gray-800 mb-6">Your Profile</h1>
-        <div className="bg-white shadow-lg rounded-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-700 mb-4">Personal Information</h2>
-          <div className="space-y-2">
-            <p className="text-gray-600"><strong>Name:</strong> {user.name}</p>
-            <p className="text-gray-600"><strong>Email:</strong> {user.email}</p>
+    fetchData();
+  }, [router]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const user = auth.currentUser;
+      await updateDoc(doc(db, 'users', user.uid), {
+        ...formData,
+        updatedAt: new Date().toISOString()
+      });
+      alert('Profile updated successfully!');
+    } catch (error) {
+      console.error('Error updating profile:', error);
+    }
+  };
+
+  if (!userData) return <div className="p-8">Loading...</div>;
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
+      <div className="w-full max-w-md bg-white p-8 rounded-lg shadow-lg">
+        <h1 className="text-3xl font-bold mb-6 text-center">Your Profile</h1>
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Name</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="mt-1 block w-full px-4 py-2 border rounded shadow-sm"
+            />
           </div>
-        </div>
-        <div className="mt-6">
-          <h2 className="text-xl font-semibold text-gray-700 mb-4">Your Listed Materials</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {user.materialsListed.map((material) => (
-              <div key={material.id} className="bg-white shadow-lg rounded-lg p-4">
-                <h3 className="text-lg font-semibold text-gray-800">{material.title}</h3>
-                <p className="text-gray-600">Condition: {material.condition}</p>
-              </div>
-            ))}
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Location</label>
+            <input
+              type="text"
+              value={formData.location}
+              onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+              className="mt-1 block w-full px-4 py-2 border rounded shadow-sm"
+            />
           </div>
-        </div>
+          <button
+            type="submit"
+            className="w-full py-2 px-4 bg-green-600 text-white rounded hover:bg-green-700"
+          >
+            Update Profile
+          </button>
+        </form>
       </div>
-    );
-  }
+    </div>
+  );
+}

@@ -1,22 +1,36 @@
-import { connectToDatabase } from '@/src/lib/dbconnect';
-import { auth } from '@/lib/firebase-admin'; // You'll need to set up Firebase Admin
+// pages/api/materials.js
+import { adminDb, adminAuth } from '@/lib/firebase-admin';
 
 export default async function handler(req, res) {
-  const { db } = await connectToDatabase();
-
   // GET User's Materials
   if (req.method === 'GET') {
     try {
       const { userId } = req.query;
-      const materials = await db
-        .collection('materials')
-        .find({ ownerId: userId })
-        .sort({ createdAt: -1 })
-        .toArray();
+      
+      if (!userId) {
+        return res.status(400).json({ error: 'Missing user ID' });
+      }
+
+      const snapshot = await adminDb.collection('materials')
+        .where('ownerId', '==', userId)
+        .orderBy('createdAt', 'desc')
+        .get();
+
+      const materials = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        // Convert Firestore timestamps to ISO strings
+        createdAt: doc.data().createdAt.toDate().toISOString(),
+        updatedAt: doc.data().updatedAt.toDate().toISOString()
+      }));
 
       return res.status(200).json(materials);
     } catch (error) {
-      return res.status(500).json({ error: 'Failed to fetch materials' });
+      console.error('GET Materials Error:', error);
+      return res.status(500).json({ 
+        error: 'Failed to fetch materials',
+        code: error.code || 'INTERNAL_ERROR'
+      });
     }
   }
 
@@ -26,28 +40,51 @@ export default async function handler(req, res) {
       const { title, description, subject, level } = req.body;
       const authorization = req.headers.authorization;
 
+      // Validate request
       if (!authorization) {
         return res.status(401).json({ error: 'Authorization required' });
       }
 
       const token = authorization.split(' ')[1];
-      const { uid } = await auth.verifyIdToken(token);
+      const { uid, email } = await adminAuth.verifyIdToken(token);
 
-      const newMaterial = {
-        title,
-        description,
-        subject,
-        level,
-        ownerId: uid,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+      // In POST handler, update validation and document creation:
+    if (!title || !description || !subject || !level || !condition) {
+        return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['title', 'description', 'subject', 'level', 'condition']
+      });
+    }
 
-      const result = await db.collection('materials').insertOne(newMaterial);
-      return res.status(201).json({ ...newMaterial, _id: result.insertedId });
+    const newMaterial = {
+      title: title.trim(),
+      description: description.trim(),
+      subject: subject.trim(),
+      level: level.trim(),
+      condition: condition.trim(), // Add condition field
+      ownerId: uid,
+      ownerEmail: email,
+      createdAt: adminFirestore.FieldValue.serverTimestamp(),
+      updatedAt: adminFirestore.FieldValue.serverTimestamp()
+    };
+
+      // Add to Firestore
+      const docRef = await adminDb.collection('materials').add(newMaterial);
+      const materialDoc = await docRef.get();
+
+      return res.status(201).json({
+        id: docRef.id,
+        ...materialDoc.data(),
+        createdAt: materialDoc.data().createdAt.toDate().toISOString(),
+        updatedAt: materialDoc.data().updatedAt.toDate().toISOString()
+      });
 
     } catch (error) {
-      return res.status(500).json({ error: 'Failed to create material' });
+      console.error('POST Material Error:', error);
+      return res.status(500).json({ 
+        error: 'Failed to create material',
+        code: error.code || 'INTERNAL_ERROR'
+      });
     }
   }
 

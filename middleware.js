@@ -1,16 +1,32 @@
 import { NextResponse } from 'next/server';
-import { getAuth } from 'firebase/auth';
-import { app } from '@/lib/firebase';
 
-export async function middleware(request) {
-  const auth = getAuth(app);
-  const user = auth.currentUser;
-  const { pathname } = request.nextUrl;
+export const config = {
+  matcher: ['/dashboard/:path*']
+};
 
-  // Redirect unauthenticated users from protected routes
-  if (pathname.startsWith('/dashboard') && !user) {
-    return NextResponse.redirect(new URL('/login', request.url));
+export async function middleware(req) {
+  const sessionCookie = req.cookies.get('__session')?.value;
+  const url = req.nextUrl.clone();
+
+  if (!sessionCookie) {
+    url.pathname = '/login';
+    return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  try {
+    const verifyResponse = await fetch(new URL('/api/session', req.url), {
+      headers: { cookie: `__session=${sessionCookie}` }
+    });
+    
+    if (verifyResponse.ok) {
+      return NextResponse.next();
+    }
+  } catch (error) {
+    console.error('Middleware verification failed:', error);
+  }
+
+  url.pathname = '/login';
+  const response = NextResponse.redirect(url);
+  response.cookies.delete('__session');
+  return response;
 }

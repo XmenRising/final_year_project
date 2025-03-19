@@ -1,32 +1,33 @@
-import { connectToDatabase } from '@src//lib/dbconnect';
-import { auth } from '@/lib/firebase-admin';
-import { ObjectId } from 'mongodb';
+import { adminDb, adminAuth,adminFirestore } from '@/lib/firebase-admin';
 
 export default async function handler(req, res) {
-  const { db } = await connectToDatabase();
-
   // GET Requests for User's Materials
   if (req.method === 'GET') {
     try {
       const { ownerId } = req.query;
-      const requests = await db
-        .collection('requests')
-        .aggregate([
-          { $match: { ownerId } },
-          {
-            $lookup: {
-              from: 'materials',
-              localField: 'materialId',
-              foreignField: '_id',
-              as: 'material'
-            }
-          },
-          { $unwind: '$material' }
-        ])
-        .toArray();
+      
+      if (!ownerId) {
+        return res.status(400).json({ error: 'Missing owner ID' });
+      }
+
+      const snapshot = await adminDb.collection('requests')
+        .where('ownerId', '==', ownerId)
+        .orderBy('createdAt', 'desc')
+        .get();
+      const requests = [];
+      for (const doc of snapshot.docs) {
+        const request = doc.data();
+        const materialDoc = await adminDb.collection('materials').doc(request.materialId).get();
+        requests.push({
+          id: doc.id,
+          ...request,
+          material: materialDoc.exists ? materialDoc.data() : null
+        });
+      }
 
       return res.status(200).json(requests);
     } catch (error) {
+      console.error('Error fetching requests:', error);
       return res.status(500).json({ error: 'Failed to fetch requests' });
     }
   }
@@ -43,25 +44,29 @@ export default async function handler(req, res) {
       }
 
       const token = authorization.split(' ')[1];
-      const { uid } = await auth.verifyIdToken(token);
+      const decodedToken = await adminAuth.verifyIdToken(token);
 
-      const request = await db.collection('requests').findOne({
-        _id: new ObjectId(id),
-        ownerId: uid
-      });
+      const requestRef = adminDb.collection('requests').doc(id);
+      const requestDoc = await requestRef.get();
 
-      if (!request) {
+      if (!requestDoc.exists || requestDoc.data().ownerId !== decodedToken.uid) {
         return res.status(404).json({ error: 'Request not found' });
       }
 
-      const result = await db.collection('requests').updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { status, updatedAt: new Date() } }
-      );
+      
+      await requestRef.update({
+        status,
+        updatedAt: adminFirestore.FieldValue.serverTimestamp()
+      });
 
-      return res.status(200).json({ ...request, status });
+      return res.status(200).json({
+        id: requestDoc.id,
+        ...requestDoc.data(),
+        status
+      });
 
     } catch (error) {
+      console.error('Error updating request:', error);
       return res.status(500).json({ error: 'Failed to update request' });
     }
   }

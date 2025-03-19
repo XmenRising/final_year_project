@@ -1,107 +1,135 @@
+// components/SignupForm.jsx
 'use client';
 
-import { signIn } from 'next-auth/react';
+import { useState } from 'react';
 import Link from 'next/link';
-
+import { useRouter } from 'next/navigation';
+import { auth, db } from '@/lib/firebase';
+import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
 
 export function SignupForm() {
-  
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [location, setLocation] = useState('');
+  const [role, setRole] = useState('donor'); // default is donor
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const handleSignup = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      // Create user with email/password
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      // Send verification email
+      await sendEmailVerification(userCredential.user);
+      // Save user data with selected role
+      await setDoc(doc(db, 'users', userCredential.user.uid), {
+        name,
+        email,
+        location,
+        role, // donor or requester
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        bookCount: 0,
+        completedExchanges: 0
+      });
+      // Redirect to email verification notice
+      router.push('/verify-email');
+    } catch (err) {
+      console.error(err);
+      setError(
+        err.code === 'auth/email-already-in-use'
+          ? 'Email already registered'
+          : err.code === 'auth/weak-password'
+          ? 'Password should be at least 6 characters'
+          : err.code === 'auth/invalid-email'
+          ? 'Invalid email address'
+          : 'Registration failed. Please try again'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        {/* Header */}
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Create New Account
-          </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
-            Already registered?{' '}
-            <Link href="/login" className="font-medium text-green-600 hover:text-green-500">
-              Sign in here
-            </Link>
-          </p>
-        </div>
-        {/* Divider */}
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-300"></div>
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="px-2 bg-gray-50 text-gray-500">Or register with email</span>
-          </div>
-        </div>
-
-        {/* Registration Form */}
-        <form className="mt-8 space-y-6" action="#" method="POST">
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="email" className="sr-only">
-                Email address
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="sr-only">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm"
-                placeholder="Password"
-              />
-            </div>
-            <div>
-              <label htmlFor="confirm-password" className="sr-only">
-                Confirm Password
-              </label>
-              <input
-                id="confirm-password"
-                name="confirm-password"
-                type="password"
-                autoComplete="new-password"
-                required
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-green-500 focus:border-green-500 focus:z-10 sm:text-sm"
-                placeholder="Confirm Password"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white p-8 rounded-lg shadow">
+        <h1 className="text-2xl font-bold mb-6 text-center">Join Book Exchange</h1>
+        <form onSubmit={handleSignup} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Full Name</label>
             <input
-              id="terms"
-              name="terms"
-              type="checkbox"
-              className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-4 py-2 border rounded focus:ring-2 focus:ring-green-500"
               required
             />
-            <label htmlFor="terms" className="ml-2 block text-sm text-gray-900">
-              I agree to the{' '}
-              <a href="#" className="text-green-600 hover:text-green-500">
-                Terms of Service
-              </a>
-            </label>
           </div>
-
           <div>
-            <button
-              type="submit"
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-            >
-              Create Account
-            </button>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-2 border rounded focus:ring-2 focus:ring-green-500"
+              required
+            />
           </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-2 border rounded focus:ring-2 focus:ring-green-500"
+              required
+              minLength="6"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Location</label>
+            <input
+              type="text"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              className="w-full px-4 py-2 border rounded focus:ring-2 focus:ring-green-500"
+              required
+              placeholder="City or Region"
+            />
+          </div>
+          {/* Role selection */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Register as</label>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="w-full px-4 py-2 border rounded focus:ring-2 focus:ring-green-500"
+            >
+              <option value="donor">Donor</option>
+              <option value="requester">Requester</option>
+            </select>
+          </div>
+          {error && <p className="text-red-600 text-sm">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-2 px-4 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+          >
+            {loading ? 'Creating account...' : 'Sign Up'}
+          </button>
+          <p className="mt-4 text-center text-sm">
+            Already have an account?{' '}
+            <Link href="/login" className="text-green-600 hover:underline">
+              Login here
+            </Link>
+          </p>
         </form>
       </div>
     </div>
