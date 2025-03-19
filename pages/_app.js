@@ -2,7 +2,7 @@ import ErrorBoundary from '@/components/ErrorBoundary';
 import { useEffect } from 'react';
 import { auth } from '@/lib/firebase';
 import { validateFirebaseConfig } from '@/lib/validateEnv';
-
+import '@/styles/globals.css';
 export default function MyApp({ Component, pageProps }) {
   if (typeof window === 'undefined') {
     validateFirebaseConfig();;
