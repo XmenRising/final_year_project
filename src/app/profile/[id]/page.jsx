@@ -1,44 +1,81 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { auth, db } from '@/lib/firebase';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 
 export default function ProfilePage() {
   const router = useRouter();
+  const { id } = useParams(); // Get user ID from URL
   const [userData, setUserData] = useState(null);
-  const [formData, setFormData] = useState({
-    name: '',
-    location: ''
-  });
+  const [formData, setFormData] = useState({ name: '', location: '' });
+  const [loading, setLoading] = useState(true); // Show loading state
+
+  console.log("User ID from URL:", id); // Debugging
 
   useEffect(() => {
     const fetchData = async () => {
-      const user = auth.currentUser;
-      if (!user) {
-        router.push('/login');
-        return;
-      }
-      const userDocRef = doc(db, 'users', user.uid);
-      const userSnap = await getDoc(userDocRef);
-      if (userSnap.exists()) {
-        setUserData(userSnap.data());
-        setFormData({
-          name: userSnap.data().name || '',
-          location: userSnap.data().location || ''
-        });
+      try {
+        setLoading(true);
+
+        // Wait for authentication state to be loaded
+        const user = auth.currentUser;
+        console.log("Current Auth User:", user); // Debugging
+
+        if (!user) {
+          console.warn("User not authenticated. Redirecting...");
+          router.push('/login');
+          return;
+        }
+
+        if (!id) {
+          console.error("Error: User ID is missing.");
+          return;
+        }
+
+        if (user.uid !== id) {
+          console.warn("Unauthorized access attempt.");
+          router.push('/403'); // Redirect to 403 Forbidden page
+          return;
+        }
+
+        const userDocRef = doc(db, "users", id);
+        const userSnap = await getDoc(userDocRef);
+
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          setUserData(data);
+          setFormData({
+            name: data.name || "",
+            location: data.location || "",
+          });
+        } else {
+          console.warn("User not found, redirecting...");
+          router.push("/404");
+        }
+      } catch (error) {
+        console.error("Firestore error:", error.message);
+      } finally {
+        setLoading(false);
       }
     };
-    fetchData();
-  }, [router]);
+
+    if (id) fetchData();
+  }, [id, router]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const user = auth.currentUser;
+
+    if (!user || user.uid !== id) {
+      console.error("Unauthorized update attempt.");
+      return;
+    }
+
     try {
-      const user = auth.currentUser;
-      await updateDoc(doc(db, 'users', user.uid), {
+      await updateDoc(doc(db, 'users', id), {
         ...formData,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       });
       alert('Profile updated successfully!');
     } catch (error) {
@@ -46,7 +83,7 @@ export default function ProfilePage() {
     }
   };
 
-  if (!userData) return <div className="p-8">Loading...</div>;
+  if (loading) return <div className="p-8 text-center">Loading profile...</div>;
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
